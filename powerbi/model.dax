@@ -1,0 +1,66 @@
+// Power BI model for the Wildau fuel dashboard.
+// The .pbix file is not published (it contains Tankerkönig price data), so the
+// tables and measures are kept here as text.
+
+// ---------- Calculated tables (Modeling > New table) ----------
+
+// Date table: one row per day of the analysis period
+Date =
+ADDCOLUMNS (
+    CALENDAR ( DATE ( 2025, 11, 1 ), DATE ( 2026, 10, 31 ) ),
+    "Month", FORMAT ( [Date], "yyyy-MM" ),
+    "Weekday no", WEEKDAY ( [Date], 2 ),
+    "Weekday", SWITCH ( WEEKDAY ( [Date], 2 ), 1, "Mon", 2, "Tue", 3, "Wed", 4, "Thu", 5, "Fri", 6, "Sat", 7, "Sun" ),
+    "Day type", IF ( WEEKDAY ( [Date], 2 ) >= 6, "Weekend", "Workday" ),
+    "Period", IF ( [Date] < DATE ( 2026, 4, 1 ), "Before 12:00 rule", "After 12:00 rule" )
+)
+
+// Station and fuel lists shared by both fact tables, so one slicer filters both
+Station = DISTINCT ( UNION ( VALUES ( v_sale[station] ), VALUES ( v_hourly_price[station] ) ) )
+
+Fuel = DISTINCT ( UNION ( VALUES ( v_sale[fuel] ), VALUES ( v_hourly_price[fuel] ) ) )
+
+// ---------- Relationships (one-to-many, single direction) ----------
+// Date[Date]        -> v_sale[sale_date],  v_hourly_price[price_date]
+// Station[station]  -> v_sale[station],    v_hourly_price[station]
+// Fuel[fuel]        -> v_sale[fuel],       v_hourly_price[fuel]
+
+// ---------- Measures on simulated sales (table v_sale) ----------
+
+Revenue = SUM ( v_sale[amount_eur] )
+
+// Named "Total liters": a measure cannot have the same name as the column v_sale[liters]
+Total liters = SUM ( v_sale[liters] )
+
+Fills = COUNTROWS ( v_sale )
+
+Avg fill = DIVIDE ( [Revenue], [Fills] )
+
+// Volume-weighted price actually paid, EUR per litre
+Avg price paid = DIVIDE ( [Revenue], [Total liters] )
+
+// Change against the previous month
+Revenue MoM % =
+VAR PrevMonth = CALCULATE ( [Revenue], DATEADD ( 'Date'[Date], -1, MONTH ) )
+RETURN DIVIDE ( [Revenue] - PrevMonth, PrevMonth )
+
+// Share of E10 in all petrol litres (ignores the fuel slicer on purpose)
+E10 share of petrol =
+DIVIDE (
+    CALCULATE ( [Total liters], Fuel[fuel] = "Super E10" ),
+    CALCULATE ( [Total liters], Fuel[fuel] IN { "Super E5", "Super E10" } )
+)
+
+// ---------- Measures on real prices (table v_hourly_price) ----------
+
+Avg price = AVERAGE ( v_hourly_price[avg_price_eur] )
+
+// Daily pattern: how far an hour is above or below that day's average, in cents
+Diff from day avg (ct) = AVERAGE ( v_hourly_price[diff_from_day_avg_ct] )
+
+// Price gap between the two stations, in cents (positive = Shell more expensive)
+Shell minus Sprint (ct) =
+100 * (
+    CALCULATE ( [Avg price], Station[station] = "Shell" )
+        - CALCULATE ( [Avg price], Station[station] = "Sprint" )
+)
